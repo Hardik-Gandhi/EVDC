@@ -4,6 +4,8 @@ const passport = require('passport');
 require('../middlewares/passport');
 const { removeFields, jsonToObject, genrateJwt } = require('../utils/helper.js');
 const { isAuthenticated } = require('../middlewares/authentication');
+const Joi = require('joi');
+const USER = require('../models/users');
 
 // Root path
 router.get('/', function (req, res, next) {
@@ -15,11 +17,11 @@ router.post('/signUp',async (req, res, next) => {
   passport.authenticate('signup', { session: false }, async (err, user, info) => {
     if (err || info) {
       if(err) {
-        let statusCode = err.joi ? 422 : 500;
+        let statusCode = err.joi ? 422 : 201;
         err = err.joi ? err.joi : err.message;
         if(!res.headersSent) return res.status(statusCode).sendJson(err);
       } else {
-        if(!res.headersSent) return res.status(500).sendJson(info && info.message ? info.message : 'Something went wrong while creating new User.');
+        if(!res.headersSent) return res.status(201).sendJson(info && info.message ? info.message : 'Something went wrong while creating new User.');
       }
     } else {
       const body = { _id: user._id, email: user.email };
@@ -38,7 +40,7 @@ router.post('/signUp',async (req, res, next) => {
 router.post('/signIn', async (req, res, next) => {
     passport.authenticate('login', async (err, user, info) => {
       if (info && info.message) {
-        return res.status(500).sendJson(info.message);
+        return res.status(201).sendJson(info.message);
       }
   
       try {
@@ -55,7 +57,7 @@ router.post('/signIn', async (req, res, next) => {
         });
       } catch (error) {
         return res
-          .status(500)
+          .status(201)
           .sendJson(error ? error.message : 'Error while login');
       }
     })(req, res, next);
@@ -70,7 +72,7 @@ router.get('/auth/google/callback',  passport.authenticate('google', { failureRe
   // Handle Google auth success
   req.login(req.user, { session : false }, async (error) => {
     if( error )
-      return  res.status(500).sendJson(error ? error.message : 'Error while google login');;
+      return  res.status(201).sendJson(error ? error.message : 'Error while google login');;
 
     const body = { _id : req.user._id, email : req.user.email, googleId: req.user.googleId };
     const token = await genrateJwt(body);
@@ -81,7 +83,7 @@ router.get('/auth/google/callback',  passport.authenticate('google', { failureRe
 });
 
 // Handle Google auth failure
-router.get('/googleFails', (req,res) => res.status(500).sendJson('Google Authentication Fails'));
+router.get('/googleFails', (req,res) => res.status(201).sendJson('Google Authentication Fails'));
 
 //  Facebook auth route
 router.get('/auth/facebook', passport.authenticate('facebook', {scope: 'email'}));
@@ -101,7 +103,7 @@ router.get('/auth/facebook/callback', passport.authenticate('facebook', { failur
 });
 
 // Handle Facebook auth failure
-router.get('/facebookFails', (req,res) => res.status(500).sendJson('Facebook Authentication Fails'));
+router.get('/facebookFails', (req,res) => res.status(201).sendJson('Facebook Authentication Fails'));
 
 // Handle Facebook auth success
 router.get('/facebookSuccess', async (req,res) => {
@@ -123,8 +125,35 @@ router.get('/profile', isAuthenticated, (req, res, next) => {
     var responsePayload = removeFields(jsonToObject(req.user), ['password']);
     return res.sendJson(responsePayload);
   } else {
-    return res.status(500).sendJson('Error while fetching profile details.');
+    return res.status(201).sendJson('Error while fetching profile details.');
   }
+});
+
+// Update profile
+router.put('/profile', isAuthenticated, (req, res, next) => {
+  const validationSchema = Joi.object({
+    firstName: Joi.string().required(),
+    lastName: Joi.string().required(),
+    email: Joi.string().email().allow("").allow(null).optional(),
+    mobile: Joi.string().allow("").allow(null).optional()
+  });
+
+  var validation = validationSchema.validate(req.body);
+  if (validation.error) {
+    return res.status(422).sendJson(validation.error.message);
+  }
+
+  const payload = validation.value;
+  payload.updatedBy = req.user._id;
+
+  USER.findOneAndUpdate({ _id: req.user._id, isDeleted: false }, { $set: payload }, { new: true })
+  .then(user => {
+    if(!user) {
+      return res.status(404).sendJson("User not found.");
+    }
+    return res.status(200).sendJson(removeFields(jsonToObject(user)));
+  })
+  .catch((err) => res.status(201).sendJson(err ? err.message : "Something went wrong while updating user's profile."));
 });
 
 module.exports = router;
